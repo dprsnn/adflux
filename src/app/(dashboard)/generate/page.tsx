@@ -13,8 +13,10 @@ export default async function GeneratePage() {
     select: {
       id: true,
       name: true,
+      description: true,
       price: true,
       promotion: true,
+      productDna: true,
       imageUrls: true,
       brand: { select: { name: true } },
     },

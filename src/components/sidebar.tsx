@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { Palette, Package, Sparkles, Users, Shield } from "lucide-react";
+import { Palette, Package, Sparkles, Users, Shield, ImageIcon } from "lucide-react";
 import { Separator } from "@/components/ui/separator";
 import { cn } from "@/lib/utils";
 
@@ -14,6 +14,7 @@ const navItems = [
 
 const adminItems = [
   { href: "/admin/users", label: "Користувачі", icon: Users },
+  { href: "/admin/references", label: "Референси", icon: ImageIcon },
 ];
 
 interface SidebarProps {

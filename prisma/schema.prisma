@@ -60,3 +60,20 @@ enum ProductStatus {
   ANALYZING
   READY
 }
+
+enum CreativeType {
+  CONVERSION
+  SOCIAL_PROOF
+  PROMO
+  UGC
+}
+
+model Reference {
+  id           String       @id @default(cuid())
+  imageUrl     String
+  creativeType CreativeType
+  label        String?
+  createdAt    DateTime     @default(now())
+
+  @@map("references")
+}
