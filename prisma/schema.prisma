@@ -1,0 +1,62 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+model User {
+  id        String   @id @default(cuid())
+  email     String   @unique
+  name      String?
+  avatarUrl String?
+  role      Role     @default(USER)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  brands    Brand[]
+
+  @@map("users")
+}
+
+enum Role {
+  USER
+  ADMIN
+}
+
+model Brand {
+  id        String   @id @default(cuid())
+  userId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  name      String
+  url       String?
+  logoUrl   String?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  products  Product[]
+
+  @@map("brands")
+}
+
+model Product {
+  id          String        @id @default(cuid())
+  brandId     String
+  brand       Brand         @relation(fields: [brandId], references: [id], onDelete: Cascade)
+  name        String
+  description String?
+  price       String?
+  promotion   String?
+  productDna  Json?
+  imageUrls   String[]
+  status      ProductStatus @default(DRAFT)
+  createdAt   DateTime      @default(now())
+  updatedAt   DateTime      @updatedAt
+
+  @@map("products")
+}
+
+enum ProductStatus {
+  DRAFT
+  ANALYZING
+  READY
+}
