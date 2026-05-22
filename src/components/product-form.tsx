@@ -15,15 +15,22 @@ import {
   CardHeader,
   CardTitle,
 } from "@/components/ui/card";
-import { Upload, Loader2, X, ImageIcon } from "lucide-react";
+import { Upload, Loader2, X, ImageIcon, Globe, Sparkles } from "lucide-react";
 import { createClient } from "@/lib/supabase/client";
 import { toast } from "sonner";
+import { AnalysisLoader } from "@/components/analysis-loader";
 
 interface ProductFormData {
   name: string;
   description: string;
   price: string;
   promotion: string;
+  // DNA fields
+  tone: string;
+  targetSegments: string;
+  painPoints: string;
+  benefits: string;
+  mainObjection: string;
 }
 
 interface ProductFormProps {
@@ -35,6 +42,13 @@ interface ProductFormProps {
     price: string | null;
     promotion: string | null;
     imageUrls: string[];
+    productDna?: {
+      tone: string;
+      targetSegments: string;
+      painPoints: string;
+      benefits: string;
+      mainObjection: string;
+    } | null;
   };
 }
 
@@ -46,12 +60,16 @@ export function ProductForm({ brandId, initialData }: ProductFormProps) {
     initialData?.imageUrls ?? []
   );
   const [uploading, setUploading] = useState(false);
+  const [scrapeUrl, setScrapeUrl] = useState("");
+  const [scraping, setScraping] = useState(false);
 
   const isEditing = !!initialData;
+  const dna = initialData?.productDna;
 
   const {
     register,
     handleSubmit,
+    setValue,
     formState: { errors },
   } = useForm<ProductFormData>({
     defaultValues: {
@@ -59,8 +77,55 @@ export function ProductForm({ brandId, initialData }: ProductFormProps) {
       description: initialData?.description ?? "",
       price: initialData?.price ?? "",
       promotion: initialData?.promotion ?? "",
+      tone: dna?.tone ?? "",
+      targetSegments: dna?.targetSegments ?? "",
+      painPoints: dna?.painPoints ?? "",
+      benefits: dna?.benefits ?? "",
+      mainObjection: dna?.mainObjection ?? "",
     },
   });
+
+  async function handleScrapeUrl() {
+    if (!scrapeUrl) return;
+    setScraping(true);
+    setError(null);
+
+    try {
+      const res = await fetch("/api/products/scrape", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ url: scrapeUrl, brandId }),
+      });
+
+      if (!res.ok) {
+        const data = await res.json();
+        throw new Error(data.error || "Помилка зчитування");
+      }
+
+      const data = await res.json();
+
+      // Fill form fields with scraped data
+      if (data.name) setValue("name", data.name);
+      if (data.description) setValue("description", data.description);
+      if (data.price) setValue("price", data.price);
+      if (data.tone) setValue("tone", data.tone);
+      if (data.targetSegments) setValue("targetSegments", data.targetSegments);
+      if (data.painPoints) setValue("painPoints", data.painPoints);
+      if (data.benefits) setValue("benefits", data.benefits);
+      if (data.mainObjection) setValue("mainObjection", data.mainObjection);
+      if (data.imageUrls?.length) {
+        setImageUrls((prev) => [...prev, ...data.imageUrls].slice(0, 10));
+      }
+
+      toast.success("Дані зчитано! Перевірте та збережіть.");
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : "Помилка зчитування";
+      setError(msg);
+      toast.error(msg);
+    } finally {
+      setScraping(false);
+    }
+  }
 
   async function handleImageUpload(e: React.ChangeEvent<HTMLInputElement>) {
     const files = e.target.files;
@@ -104,7 +169,6 @@ export function ProductForm({ brandId, initialData }: ProductFormProps) {
       toast.error(msg);
     } finally {
       setUploading(false);
-      // Reset input
       e.target.value = "";
     }
   }
@@ -116,6 +180,18 @@ export function ProductForm({ brandId, initialData }: ProductFormProps) {
   async function onSubmit(formData: ProductFormData) {
     setLoading(true);
     setError(null);
+
+    const hasDna = formData.tone || formData.targetSegments || formData.painPoints || formData.benefits || formData.mainObjection;
+
+    const productDna = hasDna
+      ? {
+          tone: formData.tone,
+          targetSegments: formData.targetSegments,
+          painPoints: formData.painPoints,
+          benefits: formData.benefits,
+          mainObjection: formData.mainObjection,
+        }
+      : null;
 
     try {
       const url = isEditing
@@ -133,6 +209,8 @@ export function ProductForm({ brandId, initialData }: ProductFormProps) {
           price: formData.price || null,
           promotion: formData.promotion || null,
           imageUrls,
+          productDna,
+          ...(productDna && { status: "READY" }),
         }),
       });
 
@@ -162,6 +240,47 @@ export function ProductForm({ brandId, initialData }: ProductFormProps) {
         </div>
       )}
 
+      {/* URL scrape */}
+      {!isEditing && (
+        <Card>
+          <CardHeader>
+            <CardTitle className="flex items-center gap-2">
+              <Globe className="h-5 w-5" />
+              Зчитати за посиланням
+            </CardTitle>
+            <CardDescription>
+              Вставте URL сторінки товару — ШІ заповнить всі поля автоматично. Ви зможете відредагувати перед збереженням.
+            </CardDescription>
+          </CardHeader>
+          <CardContent>
+            {scraping ? (
+              <AnalysisLoader />
+            ) : (
+              <div className="flex gap-2">
+                <div className="relative flex-1">
+                  <Globe className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
+                  <Input
+                    value={scrapeUrl}
+                    onChange={(e) => setScrapeUrl(e.target.value)}
+                    placeholder="https://example.com/product/..."
+                    className="pl-9"
+                  />
+                </div>
+                <Button
+                  type="button"
+                  onClick={handleScrapeUrl}
+                  disabled={!scrapeUrl}
+                >
+                  <Sparkles className="mr-1.5 h-4 w-4" />
+                  Зчитати
+                </Button>
+              </div>
+            )}
+          </CardContent>
+        </Card>
+      )}
+
+      {/* Product info */}
       <Card>
         <CardHeader>
           <CardTitle>Інформація про товар</CardTitle>
@@ -261,6 +380,66 @@ export function ProductForm({ brandId, initialData }: ProductFormProps) {
                 />
               </label>
             )}
+          </div>
+        </CardContent>
+      </Card>
+
+      {/* Product DNA */}
+      <Card>
+        <CardHeader>
+          <CardTitle>Product DNA</CardTitle>
+          <CardDescription>
+            Маркетингова суть товару для генерації креативів. Заповніть вручну або залиште порожнім — можна додати пізніше.
+          </CardDescription>
+        </CardHeader>
+        <CardContent className="space-y-4">
+          <div className="space-y-2">
+            <Label htmlFor="tone">Тон комунікації</Label>
+            <Input
+              id="tone"
+              {...register("tone")}
+              placeholder="Наприклад: дружній, експертний, провокативний, преміальний"
+            />
+          </div>
+
+          <div className="space-y-2">
+            <Label htmlFor="targetSegments">Цільові сегменти (1-2)</Label>
+            <Textarea
+              id="targetSegments"
+              {...register("targetSegments")}
+              placeholder="Наприклад: молоді мами 25-35, які шукають натуральні засоби догляду"
+              rows={2}
+            />
+          </div>
+
+          <div className="space-y-2">
+            <Label htmlFor="painPoints">Болі ЦА</Label>
+            <Textarea
+              id="painPoints"
+              {...register("painPoints")}
+              placeholder="Ключові болі та потреби цільової аудиторії"
+              rows={3}
+            />
+          </div>
+
+          <div className="space-y-2">
+            <Label htmlFor="benefits">Переваги-факти</Label>
+            <Textarea
+              id="benefits"
+              {...register("benefits")}
+              placeholder="Стислі, конкретні переваги товару (факти, не маркетингові кліше)"
+              rows={3}
+            />
+          </div>
+
+          <div className="space-y-2">
+            <Label htmlFor="mainObjection">Головне заперечення</Label>
+            <Textarea
+              id="mainObjection"
+              {...register("mainObjection")}
+              placeholder="Одне головне заперечення ЦА та як його знімає товар"
+              rows={2}
+            />
           </div>
         </CardContent>
       </Card>

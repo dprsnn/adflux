@@ -36,15 +36,11 @@ export default async function ProductDetailPage({
   if (!product) notFound();
 
   const dna = product.productDna as {
+    tone: string;
+    targetSegments: string;
     painPoints: string;
     benefits: string;
-    uniqueSellingPoints: string;
-    slogans: string[];
-    callToActions: string[];
-    objections: string;
-    targetSegments: string;
-    emotionalTriggers: string;
-    keywords: string[];
+    mainObjection: string;
   } | null;
 
   return (

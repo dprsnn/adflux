@@ -54,6 +54,13 @@ export default async function EditProductPage({
           price: product.price,
           promotion: product.promotion,
           imageUrls: product.imageUrls,
+          productDna: product.productDna as {
+            tone: string;
+            targetSegments: string;
+            painPoints: string;
+            benefits: string;
+            mainObjection: string;
+          } | null,
         }}
       />
     </div>

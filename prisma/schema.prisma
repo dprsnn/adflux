@@ -61,19 +61,38 @@ enum ProductStatus {
   READY
 }
 
-enum CreativeType {
-  CONVERSION
-  SOCIAL_PROOF
-  PROMO
-  UGC
+model Category {
+  id          String      @id @default(cuid())
+  name        String
+  slug        String      @unique
+  description String?
+  createdAt   DateTime    @default(now())
+  updatedAt   DateTime    @updatedAt
+  references  Reference[]
+
+  @@map("categories")
 }
 
 model Reference {
-  id           String       @id @default(cuid())
+  id           String   @id @default(cuid())
   imageUrl     String
-  creativeType CreativeType
+  categoryId   String
+  category     Category @relation(fields: [categoryId], references: [id])
   label        String?
-  createdAt    DateTime     @default(now())
+  imagePrompt  String?
+  textHint     String?
+  createdAt    DateTime @default(now())
 
   @@map("references")
+}
+
+model Prompt {
+  id          String   @id @default(cuid())
+  key         String   @unique
+  name        String
+  content     String
+  description String?
+  updatedAt   DateTime @updatedAt
+
+  @@map("prompts")
 }

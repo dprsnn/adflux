@@ -24,7 +24,7 @@ async function callClaudeWithRetry(
     try {
       return await anthropic.messages.create({
         model: "claude-sonnet-4-6",
-        max_tokens: 2000,
+        max_tokens: 1500,
         messages,
       });
     } catch (err) {
@@ -44,7 +44,6 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
 
-  // Rate limit: 3 product analyses per minute
   const { success } = rateLimit(`products:analyze:${user.id}`, { windowMs: 60_000, max: 3 });
   if (!success) {
     return NextResponse.json(
@@ -65,7 +64,6 @@ export async function POST(request: NextRequest) {
 
   const { productId, url } = parsed.data;
 
-  // Get product with brand data
   const product = await prisma.product.findFirst({
     where: { id: productId, brand: { userId: user.id } },
     include: { brand: true },
@@ -75,7 +73,6 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ error: "Товар не знайдено" }, { status: 404 });
   }
 
-  // Update status to ANALYZING
   await prisma.product.update({
     where: { id: productId },
     data: { status: "ANALYZING" },
@@ -84,7 +81,6 @@ export async function POST(request: NextRequest) {
   try {
     const brandContext = `Бренд: ${product.brand.name}`;
 
-    // If URL provided, fetch the page content
     let pageContent = "";
     if (url) {
       try {
@@ -113,7 +109,7 @@ ${pageContent ? `\nHTML-контент сторінки товару (обріз
     const message = await callClaudeWithRetry([
       {
         role: "user",
-        content: `Ти — маркетинговий аналітик. Проаналізуй товар та створи Product DNA документ.
+        content: `Ти — маркетинговий аналітик. Проаналізуй товар та створи стислий Product DNA.
 
 ${brandContext}
 
@@ -122,19 +118,15 @@ ${brandContext}
 Поточна ціна: ${product.price || "не вказано"}
 ${urlContext}
 
-Створи структурований JSON-документ Product DNA з наступними полями:
+Створи JSON з полями:
 
 {
   "price": "Ціна товару (знайди на сторінці або використай вказану; формат: '1 299 ₴'). Якщо ціну не вдалося знайти — null",
-  "painPoints": "Болі та потреби цільової аудиторії щодо цього товару (3-5 пунктів)",
-  "benefits": "Переваги та ключові характеристики товару (3-5 пунктів)",
-  "uniqueSellingPoints": "Унікальні торгові пропозиції (2-3 пункти)",
-  "slogans": ["Рекламний слоган 1", "Рекламний слоган 2", "Рекламний слоган 3"],
-  "callToActions": ["CTA 1", "CTA 2", "CTA 3"],
-  "objections": "Можливі заперечення клієнтів та відповіді на них (2-3 пункти)",
-  "targetSegments": "Конкретні сегменти аудиторії для цього товару",
-  "emotionalTriggers": "Емоційні тригери для реклами (2-3 пункти)",
-  "keywords": ["ключове слово 1", "ключове слово 2", "ключове слово 3", "ключове слово 4", "ключове слово 5"]
+  "tone": "Тон комунікації бренду/товару (1-3 слова, наприклад: дружній та експертний)",
+  "targetSegments": "1-2 конкретних сегменти ЦА з демографією та мотивацією",
+  "painPoints": "2-4 ключових болі ЦА, стисло",
+  "benefits": "3-5 конкретних переваг-фактів (не маркетингові кліше, а реальні характеристики)",
+  "mainObjection": "Одне головне заперечення ЦА та коротка відповідь на нього"
 }
 
 Відповідай ТІЛЬКИ валідним JSON без markdown-обгортки. Всі тексти — українською мовою.`,
@@ -155,11 +147,9 @@ ${urlContext}
 
     const productDna = JSON.parse(jsonText);
 
-    // Extract price from DNA if found, then remove it from DNA object
     const extractedPrice = productDna.price ?? null;
     delete productDna.price;
 
-    // Save Product DNA + price
     const updated = await prisma.product.update({
       where: { id: productId },
       data: {
@@ -171,7 +161,6 @@ ${urlContext}
 
     return NextResponse.json(updated);
   } catch (err: unknown) {
-    // Revert status on error
     await prisma.product.update({
       where: { id: productId },
       data: { status: "DRAFT" },

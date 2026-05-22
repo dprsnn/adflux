@@ -7,32 +7,6 @@ const anthropic = new Anthropic({
   apiKey: process.env.ANTHROPIC_API_KEY,
 });
 
-const CREATIVE_TYPE_PROMPTS: Record<string, string> = {
-  conversion: `Тип макету: КОНВЕРСІЙНИЙ (Проблема → Рішення → CTA).
-Структура кожної варіації:
-- headline: гострий заголовок, що зачіпає біль / проблему аудиторії (до 8 слів)
-- body: 1-2 речення — як товар вирішує цю проблему, конкретна перевага
-- cta: заклик до дії — короткий, дієслівний, що створює терміновість`,
-
-  social_proof: `Тип макету: СОЦІАЛЬНИЙ ДОКАЗ (Цитата → Деталь → Довіра).
-Структура кожної варіації:
-- headline: цитата-відгук від імені клієнта (від першої особи, реалістично, з емоцією)
-- body: деталь — конкретний результат або факт, що підкріплює цитату
-- cta: елемент довіри + м'який заклик (напр. "Приєднуйся до 5000+ задоволених клієнтів")`,
-
-  promo: `Тип макету: ПРОМО (Оффер + дедлайн + вигода).
-Структура кожної варіації:
-- headline: яскравий оффер — знижка, подарунок, спеціальна ціна (великий, помітний)
-- body: вигода для покупця + обмеження в часі / кількості (FOMO-тригер)
-- cta: терміновий заклик до дії з дедлайном або лічильником`,
-
-  ugc: `Тип макету: UGC / НАТИВНИЙ (органічний стиль).
-Структура кожної варіації:
-- headline: неформальний заголовок як у пості блогера — з емоцією, розмовний стиль
-- body: коротка історія або враження від використання товару, ніби пише реальна людина
-- cta: м'який, нативний заклик — без агресії, ніби порада другу`,
-};
-
 export async function POST(request: NextRequest) {
   try {
     const user = await getCurrentUser();
@@ -52,83 +26,67 @@ export async function POST(request: NextRequest) {
     }
 
     const body = await request.json();
-    const { product, creativeType, customInstructions } = body;
+    const { product, templates, customInstructions } = body;
 
-    if (!product || !creativeType) {
+    if (!product || !templates || !Array.isArray(templates) || templates.length === 0) {
       return NextResponse.json(
-        { error: "product і creativeType обов'язкові" },
+        { error: "product і templates обов'язкові" },
         { status: 400 }
       );
     }
 
-    const typePrompt = CREATIVE_TYPE_PROMPTS[creativeType];
-    if (!typePrompt) {
-      return NextResponse.json(
-        { error: "Невідомий тип креативу" },
-        { status: 400 }
-      );
-    }
-
-    // Build product context from DNA + basic info
+    // Build product context
     const dna = product.productDna as Record<string, unknown> | null;
 
     let productContext = `Товар: "${product.name}"`;
-    if (product.description)
-      productContext += `\nОпис: ${product.description}`;
+    if (product.description) productContext += `\nОпис: ${product.description}`;
     if (product.price) productContext += `\nЦіна: ${product.price}`;
-    if (product.promotion)
-      productContext += `\nАктивна акція: ${product.promotion}`;
+    if (product.promotion) productContext += `\nАктивна акція: ${product.promotion}`;
     productContext += `\nБренд: ${product.brandName}`;
 
     if (dna) {
-      if (dna.painPoints)
-        productContext += `\n\nБолі ЦА: ${dna.painPoints}`;
-      if (dna.benefits)
-        productContext += `\nПереваги товару: ${dna.benefits}`;
-      if (dna.uniqueSellingPoints)
-        productContext += `\nУТП: ${dna.uniqueSellingPoints}`;
-      if (dna.targetSegments)
-        productContext += `\nЦільові сегменти: ${dna.targetSegments}`;
-      if (dna.emotionalTriggers)
-        productContext += `\nЕмоційні тригери: ${dna.emotionalTriggers}`;
-      if (dna.objections)
-        productContext += `\nЗаперечення та відповіді: ${dna.objections}`;
-      if (Array.isArray(dna.slogans) && dna.slogans.length > 0)
-        productContext += `\nІснуючі слогани: ${dna.slogans.join("; ")}`;
-      if (Array.isArray(dna.callToActions) && dna.callToActions.length > 0)
-        productContext += `\nІснуючі CTA: ${dna.callToActions.join("; ")}`;
-      if (Array.isArray(dna.keywords) && dna.keywords.length > 0)
-        productContext += `\nКлючові слова: ${dna.keywords.join(", ")}`;
+      if (dna.tone) productContext += `\n\nТон комунікації: ${dna.tone}`;
+      if (dna.targetSegments) productContext += `\nЦільові сегменти: ${dna.targetSegments}`;
+      if (dna.painPoints) productContext += `\nБолі ЦА: ${dna.painPoints}`;
+      if (dna.benefits) productContext += `\nПереваги товару: ${dna.benefits}`;
+      if (dna.mainObjection) productContext += `\nГоловне заперечення: ${dna.mainObjection}`;
     }
 
     const userWishes = customInstructions
-      ? `\n\nДОДАТКОВІ ПОБАЖАННЯ ЗАМОВНИКА (обов'язково врахуй):\n${customInstructions}`
+      ? `\nДОДАТКОВІ ПОБАЖАННЯ ЗАМОВНИКА (обов'язково врахуй): ${customInstructions}`
       : "";
 
-    const prompt = `Ти — досвідчений копірайтер для платної реклами (Facebook, Instagram, Google Ads). Твоя задача — написати 4 варіації продаючих текстів для рекламного банера.
+    // Build template descriptions
+    const templateDescriptions = templates
+      .map(
+        (t: { label: string; textHint: string | null }, i: number) =>
+          `ШАБЛОН ${i + 1} "${t.label || `Шаблон ${i + 1}`}": ${t.textHint || "Стандартний рекламний макет з заголовком, основним текстом та CTA."}`
+      )
+      .join("\n\n");
 
-${typePrompt}
+    const prompt = `Ти — досвідчений копірайтер для платної реклами (Facebook, Instagram, Google Ads). Твоя задача — написати продаючі тексти для рекламних банерів.
 
 ${productContext}
 ${userWishes}
+
+Тобі дано ${templates.length} шаблонів банерів. Для КОЖНОГО шаблону напиши текст, який ідеально вписується в його структуру:
+
+${templateDescriptions}
 
 ПРАВИЛА:
 1. Всі тексти — ВИКЛЮЧНО українською мовою
 2. Headline — максимум 8 слів, має чіпляти з першого погляду
 3. Body — 1-3 коротких речення, конкретика, без води
-4. CTA — 2-5 слів, дієслівний, створює бажання діяти
-5. Кожна варіація повинна бути УНІКАЛЬНОЮ — різні кути подачі, різні болі, різні тригери
-6. Пиши як для людини, що скролить стрічку — у тебе 1.5 секунди привернути увагу
-7. Не використовуй кліше типу "найкращий", "унікальний", "інноваційний" — будь конкретним
-8. Якщо є ціна або акція — використовуй їх як тригер де доречно
+4. CTA — 2-5 слів, дієслівний
+5. Кожен текст УНІКАЛЬНИЙ — різні кути подачі для різних шаблонів
+6. Текст повинен ВПИСУВАТИСЬ у конкретний шаблон за стилем та обсягом
+7. Не використовуй кліше типу "найкращий", "унікальний", "інноваційний"
+8. Якщо є ціна або акція — використовуй їх де доречно
 
-Відповідай ТІЛЬКИ валідним JSON без markdown-обгортки у форматі:
+Відповідай ТІЛЬКИ валідним JSON без markdown-обгортки:
 {
   "variations": [
-    { "headline": "...", "body": "...", "cta": "..." },
-    { "headline": "...", "body": "...", "cta": "..." },
-    { "headline": "...", "body": "...", "cta": "..." },
-    { "headline": "...", "body": "...", "cta": "..." }
+    ${templates.map((_: unknown, i: number) => `{ "templateIndex": ${i}, "headline": "...", "body": "...", "cta": "..." }`).join(",\n    ")}
   ]
 }`;
 
@@ -145,18 +103,14 @@ ${userWishes}
 
     let jsonText = textContent.text.trim();
     if (jsonText.startsWith("```")) {
-      jsonText = jsonText
-        .replace(/^```(?:json)?\n?/, "")
-        .replace(/\n?```$/, "");
+      jsonText = jsonText.replace(/^```(?:json)?\n?/, "").replace(/\n?```$/, "");
     }
 
     const result = JSON.parse(jsonText);
-
     return NextResponse.json(result);
   } catch (err) {
     console.error("POST /api/generate/texts error:", err);
-    const msg =
-      err instanceof Error ? err.message : "Помилка генерації текстів";
+    const msg = err instanceof Error ? err.message : "Помилка генерації текстів";
     return NextResponse.json({ error: msg }, { status: 500 });
   }
 }

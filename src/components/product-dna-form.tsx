@@ -14,19 +14,14 @@ import {
   CardHeader,
   CardTitle,
 } from "@/components/ui/card";
-import { Separator } from "@/components/ui/separator";
 import { Loader2, Save, X } from "lucide-react";
 
-interface ProductDna {
+export interface ProductDna {
+  tone: string;
+  targetSegments: string;
   painPoints: string;
   benefits: string;
-  uniqueSellingPoints: string;
-  slogans: string[];
-  callToActions: string[];
-  objections: string;
-  targetSegments: string;
-  emotionalTriggers: string;
-  keywords: string[];
+  mainObjection: string;
 }
 
 interface ProductDnaFormProps {
@@ -36,15 +31,11 @@ interface ProductDnaFormProps {
 }
 
 interface FormData {
+  tone: string;
+  targetSegments: string;
   painPoints: string;
   benefits: string;
-  uniqueSellingPoints: string;
-  slogans: string;
-  callToActions: string;
-  objections: string;
-  targetSegments: string;
-  emotionalTriggers: string;
-  keywords: string;
+  mainObjection: string;
 }
 
 export function ProductDnaForm({ productId, initialDna, onCancel }: ProductDnaFormProps) {
@@ -57,15 +48,11 @@ export function ProductDnaForm({ productId, initialDna, onCancel }: ProductDnaFo
     handleSubmit,
   } = useForm<FormData>({
     defaultValues: {
+      tone: initialDna?.tone ?? "",
+      targetSegments: initialDna?.targetSegments ?? "",
       painPoints: initialDna?.painPoints ?? "",
       benefits: initialDna?.benefits ?? "",
-      uniqueSellingPoints: initialDna?.uniqueSellingPoints ?? "",
-      slogans: initialDna?.slogans?.join("\n") ?? "",
-      callToActions: initialDna?.callToActions?.join(", ") ?? "",
-      objections: initialDna?.objections ?? "",
-      targetSegments: initialDna?.targetSegments ?? "",
-      emotionalTriggers: initialDna?.emotionalTriggers ?? "",
-      keywords: initialDna?.keywords?.join(", ") ?? "",
+      mainObjection: initialDna?.mainObjection ?? "",
     },
   });
 
@@ -74,15 +61,11 @@ export function ProductDnaForm({ productId, initialDna, onCancel }: ProductDnaFo
     setError(null);
 
     const productDna: ProductDna = {
+      tone: data.tone,
+      targetSegments: data.targetSegments,
       painPoints: data.painPoints,
       benefits: data.benefits,
-      uniqueSellingPoints: data.uniqueSellingPoints,
-      slogans: data.slogans.split("\n").map((s) => s.trim()).filter(Boolean),
-      callToActions: data.callToActions.split(",").map((s) => s.trim()).filter(Boolean),
-      objections: data.objections,
-      targetSegments: data.targetSegments,
-      emotionalTriggers: data.emotionalTriggers,
-      keywords: data.keywords.split(",").map((s) => s.trim()).filter(Boolean),
+      mainObjection: data.mainObjection,
     };
 
     try {
@@ -120,99 +103,56 @@ export function ProductDnaForm({ productId, initialDna, onCancel }: ProductDnaFo
             {initialDna ? "Редагувати Product DNA" : "Заповнити Product DNA вручну"}
           </CardTitle>
           <CardDescription>
-            Заповніть маркетингову інформацію про товар
+            Маркетингова суть товару для генерації креативів
           </CardDescription>
         </CardHeader>
         <CardContent className="space-y-4">
           <div className="space-y-2">
-            <Label htmlFor="painPoints">Болі та потреби ЦА</Label>
-            <Textarea
-              id="painPoints"
-              {...register("painPoints")}
-              placeholder="Болі та потреби цільової аудиторії щодо цього товару"
-              rows={3}
-            />
-          </div>
-
-          <div className="space-y-2">
-            <Label htmlFor="benefits">Переваги та характеристики</Label>
-            <Textarea
-              id="benefits"
-              {...register("benefits")}
-              placeholder="Переваги та ключові характеристики товару"
-              rows={3}
-            />
-          </div>
-
-          <div className="space-y-2">
-            <Label htmlFor="uniqueSellingPoints">Унікальні торгові пропозиції</Label>
-            <Textarea
-              id="uniqueSellingPoints"
-              {...register("uniqueSellingPoints")}
-              placeholder="Чим цей товар кращий за конкурентів"
-              rows={2}
-            />
-          </div>
-
-          <Separator />
-
-          <div className="space-y-2">
-            <Label htmlFor="slogans">Рекламні слогани (кожен з нового рядка)</Label>
-            <Textarea
-              id="slogans"
-              {...register("slogans")}
-              placeholder={"Слоган 1\nСлоган 2\nСлоган 3"}
-              rows={3}
-            />
-          </div>
-
-          <div className="space-y-2">
-            <Label htmlFor="callToActions">Заклики до дії / CTA (через кому)</Label>
+            <Label htmlFor="tone">Тон комунікації</Label>
             <Input
-              id="callToActions"
-              {...register("callToActions")}
-              placeholder="Купити зараз, Дізнатись більше, Замовити"
-            />
-          </div>
-
-          <Separator />
-
-          <div className="space-y-2">
-            <Label htmlFor="objections">Заперечення та відповіді</Label>
-            <Textarea
-              id="objections"
-              {...register("objections")}
-              placeholder="Можливі заперечення клієнтів та відповіді на них"
-              rows={3}
+              id="tone"
+              {...register("tone")}
+              placeholder="Наприклад: дружній, експертний, провокативний, преміальний"
             />
           </div>
 
           <div className="space-y-2">
-            <Label htmlFor="targetSegments">Цільові сегменти</Label>
+            <Label htmlFor="targetSegments">Цільові сегменти (1-2)</Label>
             <Textarea
               id="targetSegments"
               {...register("targetSegments")}
-              placeholder="Конкретні сегменти аудиторії для цього товару"
+              placeholder="Наприклад: молоді мами 25-35, які шукають натуральні засоби догляду"
               rows={2}
             />
           </div>
 
           <div className="space-y-2">
-            <Label htmlFor="emotionalTriggers">Емоційні тригери</Label>
+            <Label htmlFor="painPoints">Болі ЦА</Label>
             <Textarea
-              id="emotionalTriggers"
-              {...register("emotionalTriggers")}
-              placeholder="Емоційні тригери для реклами"
-              rows={2}
+              id="painPoints"
+              {...register("painPoints")}
+              placeholder="Ключові болі та потреби цільової аудиторії"
+              rows={3}
             />
           </div>
 
           <div className="space-y-2">
-            <Label htmlFor="keywords">Ключові слова (через кому)</Label>
-            <Input
-              id="keywords"
-              {...register("keywords")}
-              placeholder="септик, бактерії, очистка, екологія"
+            <Label htmlFor="benefits">Переваги-факти</Label>
+            <Textarea
+              id="benefits"
+              {...register("benefits")}
+              placeholder="Стислі, конкретні переваги товару (факти, не маркетингові кліше)"
+              rows={3}
+            />
+          </div>
+
+          <div className="space-y-2">
+            <Label htmlFor="mainObjection">Головне заперечення</Label>
+            <Textarea
+              id="mainObjection"
+              {...register("mainObjection")}
+              placeholder="Одне головне заперечення ЦА та як його знімає товар"
+              rows={2}
             />
           </div>
         </CardContent>

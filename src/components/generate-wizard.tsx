@@ -1,16 +1,15 @@
 "use client";
 
-import { useState } from "react";
+import { useCallback, useEffect, useState, useRef } from "react";
 import { useSearchParams } from "next/navigation";
+import Image from "next/image";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { Textarea } from "@/components/ui/textarea";
 import { Label } from "@/components/ui/label";
+import { Textarea } from "@/components/ui/textarea";
 import {
   Card,
   CardContent,
-  CardHeader,
-  CardTitle,
 } from "@/components/ui/card";
 import {
   Select,
@@ -19,17 +18,19 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
+import { Badge } from "@/components/ui/badge";
 import {
   ArrowLeft,
   ArrowRight,
   Check,
-  Megaphone,
-  Quote,
-  Zap,
-  Users,
+  ImageIcon,
+  Loader2,
   Package,
   AlertCircle,
   RefreshCw,
+  Type,
+  History,
+  Trash2,
 } from "lucide-react";
 import { AnalysisLoader } from "@/components/analysis-loader";
 import { cn } from "@/lib/utils";
@@ -37,55 +38,6 @@ import { toast } from "sonner";
 
 /* ------------------------------------------------------------------ */
 /*  Types                                                              */
-/* ------------------------------------------------------------------ */
-
-export type CreativeType = "conversion" | "social_proof" | "promo" | "ugc";
-
-interface CreativeTypeOption {
-  id: CreativeType;
-  label: string;
-  structure: string;
-  description: string;
-  icon: React.ElementType;
-}
-
-const CREATIVE_TYPES: CreativeTypeOption[] = [
-  {
-    id: "conversion",
-    label: "Конверсійний",
-    structure: "Проблема → Рішення → CTA",
-    description:
-      "Класичний продаючий макет. Зачіпає біль аудиторії, показує товар як рішення та підштовхує до дії.",
-    icon: Megaphone,
-  },
-  {
-    id: "social_proof",
-    label: "Соціальний доказ",
-    structure: "Цитата → Деталь → Довіра",
-    description:
-      "Відгук або цитата реального клієнта, підкріплена деталями та елементами довіри.",
-    icon: Quote,
-  },
-  {
-    id: "promo",
-    label: "Промо",
-    structure: "Оффер + дедлайн + вигода",
-    description:
-      "Акційний макет з яскравим оффером, обмеженням у часі та чіткою вигодою для покупця.",
-    icon: Zap,
-  },
-  {
-    id: "ugc",
-    label: "UGC / Нативний",
-    structure: "Нативний стиль",
-    description:
-      "Виглядає як органічний пост у стрічці — без агресивної реклами, максимально нативно.",
-    icon: Users,
-  },
-];
-
-/* ------------------------------------------------------------------ */
-/*  Props                                                              */
 /* ------------------------------------------------------------------ */
 
 interface Product {
@@ -99,14 +51,96 @@ interface Product {
   brand: { name: string };
 }
 
-interface TextVariation {
+interface Template {
+  id: string;
+  imageUrl: string;
+  categoryId: string;
+  category: { name: string; slug: string };
+  label: string | null;
+  imagePrompt: string | null;
+  textHint: string | null;
+}
+
+interface ImageVariant {
+  imageUrl: string;
+  seed: number;
+  textZone: string;
+  promptUsed: string;
+  variation: Record<string, string>;
+}
+
+type CreativeType = "conversion" | "social_proof" | "promo" | "ugc";
+
+interface BackgroundSlot {
+  variant: ImageVariant;
+  templateLabel: string;
+  creativeType: CreativeType;
   headline: string;
   body: string;
   cta: string;
+  needsReview?: boolean;
+  reviewReason?: string;
+  confirmed: boolean;
+  hasText: boolean;
 }
 
 interface GenerateWizardProps {
   products: Product[];
+}
+
+/* ------------------------------------------------------------------ */
+/*  Constants                                                          */
+/* ------------------------------------------------------------------ */
+
+const CREATIVE_TYPES: { value: CreativeType; label: string; tag: string }[] = [
+  { value: "conversion", label: "Конверсійний", tag: "Біль → Рішення → CTA" },
+  { value: "social_proof", label: "Соціальний доказ", tag: "Довіра + заперечення" },
+  { value: "promo", label: "Промо", tag: "Оффер + терміновість" },
+  { value: "ugc", label: "UGC", tag: "Нативна порада" },
+];
+
+const DEFAULT_TYPE_ORDER: CreativeType[] = ["conversion", "social_proof", "promo", "ugc"];
+
+const STORAGE_KEY = "adflux:generate:session";
+
+/* ------------------------------------------------------------------ */
+/*  Session persistence                                                */
+/* ------------------------------------------------------------------ */
+
+interface SavedSession {
+  productId: string;
+  imageModel: string;
+  imageCount: number;
+  selectedTemplateIds: string[];
+  slots: BackgroundSlot[];
+  userConstraints: string;
+  savedAt: number;
+}
+
+function saveSession(data: SavedSession) {
+  try {
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(data));
+  } catch { /* quota exceeded — ignore */ }
+}
+
+function loadSession(): SavedSession | null {
+  try {
+    const raw = localStorage.getItem(STORAGE_KEY);
+    if (!raw) return null;
+    const data = JSON.parse(raw) as SavedSession;
+    // Expire after 24 hours
+    if (Date.now() - data.savedAt > 24 * 60 * 60 * 1000) {
+      localStorage.removeItem(STORAGE_KEY);
+      return null;
+    }
+    return data;
+  } catch {
+    return null;
+  }
+}
+
+function clearSession() {
+  localStorage.removeItem(STORAGE_KEY);
 }
 
 /* ------------------------------------------------------------------ */
@@ -117,47 +151,177 @@ export function GenerateWizard({ products }: GenerateWizardProps) {
   const searchParams = useSearchParams();
   const preselectedProductId = searchParams.get("productId");
 
-  // Step 0 state
-  const [productId, setProductId] = useState<string>(
-    preselectedProductId ?? ""
-  );
-  const [creativeType, setCreativeType] = useState<CreativeType | null>(null);
-  const [customInstructions, setCustomInstructions] = useState("");
+  // Settings
+  const [productId, setProductId] = useState(preselectedProductId ?? "");
+  const [imageModel, setImageModel] = useState<"gpt-image-1" | "gpt-image-2">("gpt-image-1");
+  const [imageCount, setImageCount] = useState<2 | 4>(2);
 
-  // Step navigation
+  // Templates
+  const [templates, setTemplates] = useState<Template[]>([]);
+  const [templatesLoading, setTemplatesLoading] = useState(true);
+  const [selectedTemplateIds, setSelectedTemplateIds] = useState<Set<string>>(new Set());
+
+  // Navigation
   const [step, setStep] = useState(0);
-  const [generating, setGenerating] = useState(false);
 
-  // Step 1 state
-  const [variations, setVariations] = useState<TextVariation[]>([]);
-  const [selectedVariations, setSelectedVariations] = useState<Set<number>>(
-    new Set()
-  );
+  // Step 1 — images
+  const [generatedImages, setGeneratedImages] = useState<
+    Map<number, { variants: ImageVariant[]; loading: boolean; error: string | null }>
+  >(new Map());
+
+  // Step 1 — texts (inline with images)
+  const [slots, setSlots] = useState<BackgroundSlot[]>([]);
+  const [textsLoading, setTextsLoading] = useState(false);
+  const [userConstraints, setUserConstraints] = useState("");
+
+  // Saved session
+  const [savedSession, setSavedSession] = useState<SavedSession | null>(null);
+  const slotsBuiltRef = useRef(false);
 
   const selectedProduct = products.find((p) => p.id === productId);
-  const canProceed = !!productId && !!creativeType;
+  const selectedTemplates = templates.filter((t) => selectedTemplateIds.has(t.id));
+  const canProceed = !!productId && selectedTemplateIds.size > 0;
 
-  async function handleGenerate() {
-    if (!selectedProduct || !creativeType) return;
+  // Load saved session on mount
+  useEffect(() => {
+    const session = loadSession();
+    if (session && session.slots.length > 0) {
+      setSavedSession(session);
+    }
+  }, []);
 
-    setGenerating(true);
+  function restoreSession(session: SavedSession) {
+    setProductId(session.productId);
+    setImageModel(session.imageModel as "gpt-image-1" | "gpt-image-2");
+    setImageCount(session.imageCount as 2 | 4);
+    setSelectedTemplateIds(new Set(session.selectedTemplateIds));
+    setSlots(session.slots);
+    setUserConstraints(session.userConstraints);
+    slotsBuiltRef.current = true;
     setStep(1);
+    setSavedSession(null);
+    toast.success("Сесію відновлено!");
+  }
+
+  function discardSession() {
+    clearSession();
+    setSavedSession(null);
+  }
+
+  // Auto-save when slots change
+  useEffect(() => {
+    if (slots.length > 0 && step === 1) {
+      saveSession({
+        productId,
+        imageModel,
+        imageCount,
+        selectedTemplateIds: Array.from(selectedTemplateIds),
+        slots,
+        userConstraints,
+        savedAt: Date.now(),
+      });
+    }
+  }, [slots, userConstraints, step]);
+
+  // Fetch templates
+  const fetchTemplates = useCallback(async () => {
+    setTemplatesLoading(true);
+    try {
+      const res = await fetch("/api/references");
+      if (!res.ok) throw new Error();
+      setTemplates(await res.json());
+    } catch {
+      toast.error("Не вдалося завантажити шаблони");
+    } finally {
+      setTemplatesLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    fetchTemplates();
+  }, [fetchTemplates]);
+
+  function toggleTemplate(id: string) {
+    setSelectedTemplateIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) {
+        next.delete(id);
+      } else if (next.size < 4) {
+        next.add(id);
+      } else {
+        toast.error("Максимум 4 шаблони");
+      }
+      return next;
+    });
+  }
+
+  /* ---------------------------------------------------------------- */
+  /*  Build slots from generated images                                */
+  /* ---------------------------------------------------------------- */
+
+  useEffect(() => {
+    if (step !== 1 || slotsBuiltRef.current) return;
+
+    const allDone =
+      selectedTemplates.length > 0 &&
+      selectedTemplates.every((_, i) => {
+        const img = generatedImages.get(i);
+        return img && !img.loading;
+      });
+
+    if (!allDone) return;
+
+    const newSlots: BackgroundSlot[] = [];
+    for (let ti = 0; ti < selectedTemplates.length; ti++) {
+      const img = generatedImages.get(ti);
+      if (!img || img.error) continue;
+      for (const variant of img.variants) {
+        newSlots.push({
+          variant,
+          templateLabel: selectedTemplates[ti]?.label || `Шаблон ${ti + 1}`,
+          creativeType: DEFAULT_TYPE_ORDER[newSlots.length % 4],
+          headline: "",
+          body: "",
+          cta: "",
+          confirmed: false,
+          hasText: false,
+        });
+      }
+    }
+
+    if (newSlots.length > 0) {
+      setSlots(newSlots);
+      slotsBuiltRef.current = true;
+    }
+  }, [generatedImages, step, selectedTemplates]);
+
+  /* ---------------------------------------------------------------- */
+  /*  Generate images                                                  */
+  /* ---------------------------------------------------------------- */
+
+  async function generateImagesForTemplate(templateIndex: number) {
+    const template = selectedTemplates[templateIndex];
+    if (!template || !selectedProduct) return;
+
+    setGeneratedImages((prev) => {
+      const next = new Map(prev);
+      next.set(templateIndex, { variants: [], loading: true, error: null });
+      return next;
+    });
 
     try {
-      const res = await fetch("/api/generate/texts", {
+      const res = await fetch("/api/generate/image", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          product: {
-            name: selectedProduct.name,
-            description: selectedProduct.description,
-            price: selectedProduct.price,
-            promotion: selectedProduct.promotion,
-            productDna: selectedProduct.productDna,
-            brandName: selectedProduct.brand.name,
-          },
-          creativeType,
-          customInstructions: customInstructions || null,
+          productName: selectedProduct.name,
+          productDescription: selectedProduct.description,
+          brandName: selectedProduct.brand.name,
+          productImageUrl: selectedProduct.imageUrls[0] || null,
+          templateImageUrl: template.imageUrl,
+          templateImagePrompt: template.imagePrompt,
+          count: imageCount,
+          model: imageModel,
         }),
       });
 
@@ -167,230 +331,481 @@ export function GenerateWizard({ products }: GenerateWizardProps) {
       }
 
       const data = await res.json();
-      setVariations(data.variations);
-      setSelectedVariations(new Set());
+      setGeneratedImages((prev) => {
+        const next = new Map(prev);
+        next.set(templateIndex, { variants: data.variants || [], loading: false, error: null });
+        return next;
+      });
     } catch (err: unknown) {
-      toast.error(
-        err instanceof Error ? err.message : "Помилка генерації текстів"
-      );
-      setStep(0);
-    } finally {
-      setGenerating(false);
+      const msg = err instanceof Error ? err.message : "Помилка генерації";
+      setGeneratedImages((prev) => {
+        const next = new Map(prev);
+        next.set(templateIndex, { variants: [], loading: false, error: msg });
+        return next;
+      });
     }
   }
 
-  async function handleRegenerate() {
-    setVariations([]);
-    setSelectedVariations(new Set());
-    await handleGenerate();
+  function handleGenerate() {
+    setGeneratedImages(new Map());
+    setSlots([]);
+    slotsBuiltRef.current = false;
+    setStep(1);
+    for (let i = 0; i < selectedTemplates.length; i++) {
+      generateImagesForTemplate(i);
+    }
   }
 
-  function toggleVariation(index: number) {
-    setSelectedVariations((prev) => {
-      const next = new Set(prev);
-      if (next.has(index)) {
-        next.delete(index);
-      } else {
-        next.add(index);
+  /* ---------------------------------------------------------------- */
+  /*  Generate texts for all slots                                     */
+  /* ---------------------------------------------------------------- */
+
+  async function handleGenerateTexts() {
+    if (!selectedProduct || slots.length === 0) return;
+    setTextsLoading(true);
+
+    try {
+      const dna = selectedProduct.productDna as Record<string, unknown> | null;
+
+      const items = slots.map((s, i) => ({
+        backgroundId: String(i),
+        creativeType: s.creativeType,
+      }));
+
+      const res = await fetch("/api/generate/text", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          productName: selectedProduct.name,
+          productDescription: selectedProduct.description,
+          brandName: selectedProduct.brand.name,
+          productDna: {
+            ...dna,
+            price: selectedProduct.price,
+            promotion: selectedProduct.promotion,
+          },
+          userConstraints: userConstraints || undefined,
+          items,
+        }),
+      });
+
+      if (!res.ok) {
+        const data = await res.json().catch(() => null);
+        throw new Error(data?.error || "Помилка генерації");
       }
-      return next;
-    });
+
+      const data = await res.json();
+      const resultItems = (data.items || []) as {
+        backgroundId?: string;
+        type?: string;
+        headline: string;
+        body: string;
+        cta: string;
+        needsReview?: boolean;
+        reviewReason?: string;
+      }[];
+
+      // Match by index (most reliable) — Claude returns items in same order
+      setSlots((prev) =>
+        prev.map((slot, i) => {
+          const item = resultItems[i];
+          if (!item) return slot;
+          return {
+            ...slot,
+            headline: item.headline || "",
+            body: item.body || "",
+            cta: item.cta || "",
+            needsReview: item.needsReview,
+            reviewReason: item.reviewReason,
+            confirmed: false,
+            hasText: true,
+          };
+        }),
+      );
+    } catch (err: unknown) {
+      toast.error(err instanceof Error ? err.message : "Помилка генерації текстів");
+    } finally {
+      setTextsLoading(false);
+    }
   }
 
-  function updateVariation(
-    index: number,
-    field: keyof TextVariation,
-    value: string
-  ) {
-    setVariations((prev) =>
-      prev.map((v, i) => (i === index ? { ...v, [field]: value } : v))
+  async function handleRegenerateSingle(slotIndex: number) {
+    if (!selectedProduct) return;
+    const slot = slots[slotIndex];
+    if (!slot) return;
+
+    // Show loading state on this slot
+    setSlots((prev) =>
+      prev.map((s, i) =>
+        i === slotIndex ? { ...s, hasText: false, headline: "", body: "", cta: "" } : s,
+      ),
+    );
+
+    try {
+      const dna = selectedProduct.productDna as Record<string, unknown> | null;
+
+      const res = await fetch("/api/generate/text", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          productName: selectedProduct.name,
+          productDescription: selectedProduct.description,
+          brandName: selectedProduct.brand.name,
+          productDna: {
+            ...dna,
+            price: selectedProduct.price,
+            promotion: selectedProduct.promotion,
+          },
+          userConstraints: userConstraints || undefined,
+          items: [{ backgroundId: "0", creativeType: slot.creativeType }],
+        }),
+      });
+
+      if (!res.ok) {
+        const data = await res.json().catch(() => null);
+        throw new Error(data?.error || "Помилка");
+      }
+
+      const data = await res.json();
+      const item = ((data.items || []) as Record<string, unknown>[])[0];
+      if (item) {
+        setSlots((prev) =>
+          prev.map((s, i) =>
+            i === slotIndex
+              ? {
+                  ...s,
+                  headline: (item.headline as string) || "",
+                  body: (item.body as string) || "",
+                  cta: (item.cta as string) || "",
+                  needsReview: item.needsReview as boolean | undefined,
+                  reviewReason: item.reviewReason as string | undefined,
+                  confirmed: false,
+                  hasText: true,
+                }
+              : s,
+          ),
+        );
+      }
+    } catch (err: unknown) {
+      toast.error(err instanceof Error ? err.message : "Помилка перегенерації");
+      // Restore the slot
+      setSlots((prev) =>
+        prev.map((s, i) =>
+          i === slotIndex ? { ...s, hasText: slot.hasText, headline: slot.headline, body: slot.body, cta: slot.cta } : s,
+        ),
+      );
+    }
+  }
+
+  function updateSlotField(idx: number, field: "headline" | "body" | "cta", value: string) {
+    setSlots((prev) =>
+      prev.map((s, i) => (i === idx ? { ...s, [field]: value } : s)),
     );
   }
 
-  const selectedTypeOption = CREATIVE_TYPES.find(
-    (t) => t.id === creativeType
-  );
+  function updateSlotType(idx: number, type: CreativeType) {
+    setSlots((prev) =>
+      prev.map((s, i) => (i === idx ? { ...s, creativeType: type } : s)),
+    );
+  }
+
+  function toggleConfirm(idx: number) {
+    setSlots((prev) =>
+      prev.map((s, i) => (i === idx ? { ...s, confirmed: !s.confirmed } : s)),
+    );
+  }
+
+  const allTextsConfirmed =
+    slots.length > 0 && slots.every((s) => s.confirmed && s.hasText);
+
+  const imagesAllDone =
+    selectedTemplates.length > 0 &&
+    selectedTemplates.every((_, i) => {
+      const img = generatedImages.get(i);
+      return img && !img.loading;
+    });
+
+  // For restored sessions where generatedImages is empty but slots exist
+  const hasSlots = slots.length > 0;
 
   /* ---------------------------------------------------------------- */
-  /*  Step 1 — Text variations                                        */
+  /*  Step 1 — Images + inline texts                                   */
   /* ---------------------------------------------------------------- */
   if (step === 1) {
+    const isGeneratingImages = !imagesAllDone && !hasSlots;
+
     return (
-      <div className="mx-auto max-w-3xl p-6 lg:p-8">
-        {/* Header */}
+      <div className="mx-auto max-w-5xl p-6 lg:p-8">
         <div className="mb-6 flex items-center gap-3">
-          <Button
-            variant="ghost"
-            size="sm"
-            onClick={() => setStep(0)}
-            disabled={generating}
-          >
+          <Button variant="ghost" size="sm" onClick={() => setStep(0)} disabled={isGeneratingImages}>
             <ArrowLeft className="mr-1 h-4 w-4" />
             Назад
           </Button>
         </div>
 
-        <div className="mb-6 flex items-start justify-between">
-          <div>
-            <h1 className="text-2xl font-bold text-foreground">
-              Тексти для банера
-            </h1>
-            <p className="mt-1 text-sm text-muted-foreground">
-              {selectedProduct?.brand.name} — {selectedProduct?.name}
-              {selectedTypeOption && (
-                <span className="ml-2 text-primary">
-                  · {selectedTypeOption.label}
-                </span>
-              )}
-            </p>
-          </div>
-          {!generating && variations.length > 0 && (
-            <Button
-              variant="outline"
-              size="sm"
-              onClick={handleRegenerate}
-            >
-              <RefreshCw className="mr-1.5 h-3.5 w-3.5" />
-              Перегенерувати
-            </Button>
-          )}
+        <div className="mb-6">
+          <h1 className="text-2xl font-bold text-foreground">Креативи</h1>
+          <p className="mt-1 text-sm text-muted-foreground">
+            {selectedProduct?.brand.name} — {selectedProduct?.name}
+            {isGeneratingImages && (
+              <span className="ml-2">— генерація зображень...</span>
+            )}
+          </p>
         </div>
 
-        {generating ? (
-          <Card>
-            <CardContent>
-              <AnalysisLoader />
-            </CardContent>
-          </Card>
-        ) : (
+        {/* Image generation in progress */}
+        {isGeneratingImages && (
           <div className="space-y-4">
-            <Card className="border-primary/30 bg-primary/5">
-              <CardContent className="flex items-center gap-3 py-3">
-                <Check className="h-5 w-5 shrink-0 text-primary" />
-                <p className="text-sm font-medium text-foreground">
-                  Оберіть варіації, які вам подобаються — для кожної обраної буде
-                  згенеровано зображення
-                </p>
+            {selectedTemplates.map((template, i) => {
+              const img = generatedImages.get(i);
+              const isLoading = img?.loading ?? true;
+              const hasError = !!img?.error;
+
+              if (isLoading) {
+                return (
+                  <Card key={template.id}>
+                    <CardContent className="flex items-center justify-center py-16">
+                      <Loader2 className="h-8 w-8 animate-spin text-primary" />
+                      <p className="ml-3 text-sm text-muted-foreground">
+                        {template.label || "Шаблон"} — генерація {imageCount} варіантів...
+                      </p>
+                    </CardContent>
+                  </Card>
+                );
+              }
+              if (hasError) {
+                return (
+                  <Card key={template.id}>
+                    <CardContent className="flex flex-col items-center gap-3 py-10">
+                      <AlertCircle className="h-8 w-8 text-destructive" />
+                      <p className="text-center text-sm text-destructive">{img?.error}</p>
+                      <Button variant="outline" size="sm" onClick={() => generateImagesForTemplate(i)}>
+                        <RefreshCw className="mr-1.5 h-3.5 w-3.5" />
+                        Повторити
+                      </Button>
+                    </CardContent>
+                  </Card>
+                );
+              }
+              return null;
+            })}
+          </div>
+        )}
+
+        {/* Slots ready */}
+        {hasSlots && (
+          <>
+            {/* Constraints + generate texts */}
+            <Card className="mb-6">
+              <CardContent className="space-y-3 pt-5">
+                <div className="space-y-1.5">
+                  <Label htmlFor="constraints" className="text-sm font-semibold">
+                    Обмеження та інструкції
+                    <span className="ml-2 text-xs font-normal text-muted-foreground">
+                      необов&apos;язково, найвищий пріоритет для всіх текстів
+                    </span>
+                  </Label>
+                  <Textarea
+                    id="constraints"
+                    value={userConstraints}
+                    onChange={(e) => setUserConstraints(e.target.value)}
+                    placeholder="Заборонені слова, вимоги комплаєнсу, побажання — напр.: не вживати 'лікує', 'гарантує'; згадати знижку"
+                    rows={2}
+                  />
+                </div>
+                <Button onClick={handleGenerateTexts} disabled={textsLoading}>
+                  {textsLoading ? (
+                    <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                  ) : (
+                    <Type className="mr-2 h-4 w-4" />
+                  )}
+                  {slots.some((s) => s.hasText) ? "Перегенерувати всі тексти" : "Згенерувати тексти"}
+                </Button>
               </CardContent>
             </Card>
 
-            {variations.map((v, i) => {
-              const isSelected = selectedVariations.has(i);
-              return (
+            {textsLoading && (
+              <Card className="mb-6">
+                <CardContent className="py-8">
+                  <AnalysisLoader />
+                </CardContent>
+              </Card>
+            )}
+
+            {/* Slot cards */}
+            <div className="space-y-6">
+              {slots.map((slot, i) => (
                 <Card
                   key={i}
                   className={cn(
-                    "relative transition-all",
-                    isSelected
-                      ? "border-primary shadow-sm"
-                      : "border-border opacity-60"
+                    "overflow-hidden transition-all",
+                    slot.confirmed && "border-green-500/50",
+                    slot.needsReview && !slot.confirmed && "border-yellow-500/50",
                   )}
                 >
-                  {/* Selection toggle */}
-                  <button
-                    type="button"
-                    onClick={() => toggleVariation(i)}
-                    className={cn(
-                      "absolute right-4 top-4 flex h-7 w-7 items-center justify-center rounded-full border-2 transition-all",
-                      isSelected
-                        ? "border-primary bg-primary text-primary-foreground"
-                        : "border-muted-foreground/30 hover:border-primary/50"
-                    )}
-                  >
-                    {isSelected && <Check className="h-4 w-4" />}
-                  </button>
+                  <CardContent className="py-4">
+                    <div className="flex gap-4">
+                      {/* Image preview */}
+                      <div className="relative h-48 w-32 shrink-0 overflow-hidden rounded-lg">
+                        <Image
+                          src={slot.variant.imageUrl}
+                          alt={`Фон ${i + 1}`}
+                          fill
+                          className="object-cover"
+                          unoptimized
+                        />
+                      </div>
 
-                  <CardHeader className="pb-3 pr-14">
-                    <CardTitle className="text-sm text-muted-foreground">
-                      Варіація {i + 1}
-                    </CardTitle>
-                  </CardHeader>
-                  <CardContent className="space-y-3">
-                    <div className="space-y-1.5">
-                      <Label className="text-xs uppercase tracking-wider text-muted-foreground">
-                        Заголовок
-                      </Label>
-                      <Input
-                        value={v.headline}
-                        onChange={(e) =>
-                          updateVariation(i, "headline", e.target.value)
-                        }
-                      />
-                    </div>
-                    <div className="space-y-1.5">
-                      <Label className="text-xs uppercase tracking-wider text-muted-foreground">
-                        Основний текст
-                      </Label>
-                      <Textarea
-                        value={v.body}
-                        onChange={(e) =>
-                          updateVariation(i, "body", e.target.value)
-                        }
-                        rows={2}
-                      />
-                    </div>
-                    <div className="space-y-1.5">
-                      <Label className="text-xs uppercase tracking-wider text-muted-foreground">
-                        Заклик до дії (CTA)
-                      </Label>
-                      <Input
-                        value={v.cta}
-                        onChange={(e) =>
-                          updateVariation(i, "cta", e.target.value)
-                        }
-                      />
+                      {/* Right side */}
+                      <div className="min-w-0 flex-1 space-y-3">
+                        <div className="flex items-center gap-3">
+                          <p className="text-xs text-muted-foreground">{slot.templateLabel}</p>
+                          <Badge variant="outline" className="text-[10px]">
+                            text: {slot.variant.textZone}
+                          </Badge>
+                          {slot.confirmed && <Check className="ml-auto h-4 w-4 text-green-600" />}
+                        </div>
+
+                        {/* Type selector */}
+                        <div className="space-y-1">
+                          <Label className="text-[10px] uppercase tracking-wider text-muted-foreground">Тип креативу</Label>
+                          <Select
+                            value={slot.creativeType}
+                            onValueChange={(v) => v && updateSlotType(i, v as CreativeType)}
+                          >
+                            <SelectTrigger className="h-8 w-full text-xs">
+                              <SelectValue />
+                            </SelectTrigger>
+                            <SelectContent>
+                              {CREATIVE_TYPES.map((ct) => (
+                                <SelectItem key={ct.value} value={ct.value}>
+                                  {ct.label} — {ct.tag}
+                                </SelectItem>
+                              ))}
+                            </SelectContent>
+                          </Select>
+                        </div>
+
+                        {slot.needsReview && (
+                          <p className="text-xs text-yellow-600">{slot.reviewReason}</p>
+                        )}
+
+                        {/* Text fields */}
+                        <div className="space-y-2">
+                          <div className="space-y-1">
+                            <Label className="text-[10px] uppercase tracking-wider text-muted-foreground">Headline</Label>
+                            <Input
+                              value={slot.headline}
+                              onChange={(e) => updateSlotField(i, "headline", e.target.value)}
+                              placeholder={slot.hasText ? "" : "Згенерується автоматично"}
+                              className="h-8 text-sm font-semibold"
+                            />
+                          </div>
+                          <div className="space-y-1">
+                            <Label className="text-[10px] uppercase tracking-wider text-muted-foreground">Body</Label>
+                            <Textarea
+                              value={slot.body}
+                              onChange={(e) => updateSlotField(i, "body", e.target.value)}
+                              placeholder={slot.hasText ? "" : "Згенерується автоматично"}
+                              rows={2}
+                              className="text-sm"
+                            />
+                          </div>
+                          <div className="space-y-1">
+                            <Label className="text-[10px] uppercase tracking-wider text-muted-foreground">CTA</Label>
+                            <Input
+                              value={slot.cta}
+                              onChange={(e) => updateSlotField(i, "cta", e.target.value)}
+                              placeholder={slot.hasText ? "" : "Згенерується автоматично"}
+                              className="h-8 text-sm font-medium text-primary"
+                            />
+                          </div>
+                        </div>
+
+                        {/* Actions */}
+                        <div className="flex justify-end gap-2">
+                          {slot.hasText && (
+                            <Button
+                              variant="ghost"
+                              size="sm"
+                              className="h-7 text-xs"
+                              onClick={() => handleRegenerateSingle(i)}
+                            >
+                              <RefreshCw className="mr-1 h-3 w-3" />
+                              Перегенерувати
+                            </Button>
+                          )}
+                          <Button
+                            variant={slot.confirmed ? "default" : "outline"}
+                            size="sm"
+                            className="h-7 text-xs"
+                            onClick={() => toggleConfirm(i)}
+                            disabled={!slot.hasText && !slot.headline}
+                          >
+                            <Check className="mr-1 h-3 w-3" />
+                            {slot.confirmed ? "Підтверджено" : "Підтвердити"}
+                          </Button>
+                        </div>
+                      </div>
                     </div>
                   </CardContent>
                 </Card>
-              );
-            })}
+              ))}
+            </div>
 
             {/* Next step */}
-            <div className="flex items-center justify-between pt-2">
+            <div className="mt-6 flex items-center justify-between">
               <p className="text-sm text-muted-foreground">
-                Обрано: {selectedVariations.size} з {variations.length}
-                {selectedVariations.size > 0 && (
-                  <span className="ml-1">
-                    → {selectedVariations.size}{" "}
-                    {selectedVariations.size === 1
-                      ? "зображення"
-                      : selectedVariations.size < 5
-                        ? "зображення"
-                        : "зображень"}
-                  </span>
-                )}
+                {slots.length} фонів · {slots.filter((s) => s.confirmed).length}/{slots.length} підтверджено
               </p>
-              <Button
-                size="lg"
-                disabled={selectedVariations.size === 0}
-              >
-                Далі
+              <Button size="lg" disabled={!allTextsConfirmed}>
+                Далі — фінальні креативи
                 <ArrowRight className="ml-2 h-4 w-4" />
               </Button>
             </div>
-          </div>
+          </>
         )}
       </div>
     );
   }
 
   /* ---------------------------------------------------------------- */
-  /*  Step 0 — Product + type + instructions                          */
+  /*  Step 0 — Product + Templates + Settings                          */
   /* ---------------------------------------------------------------- */
   return (
     <div className="mx-auto max-w-3xl p-6 lg:p-8">
-      {/* Header */}
       <div className="mb-8">
-        <h1 className="text-2xl font-bold text-foreground">
-          Створити креатив
-        </h1>
+        <h1 className="text-2xl font-bold text-foreground">Створити креатив</h1>
         <p className="mt-1 text-muted-foreground">
-          Оберіть товар, тип макету та додайте побажання
+          Оберіть товар, шаблони, модель та кількість варіантів
         </p>
       </div>
 
+      {/* Restore session banner */}
+      {savedSession && (
+        <Card className="mb-6 border-primary/30 bg-primary/5">
+          <CardContent className="flex items-center gap-4 py-4">
+            <History className="h-5 w-5 shrink-0 text-primary" />
+            <div className="flex-1">
+              <p className="text-sm font-medium">Є незавершена сесія</p>
+              <p className="text-xs text-muted-foreground">
+                {savedSession.slots.length} фонів · {savedSession.slots.filter((s) => s.confirmed).length} підтверджено
+                · {new Date(savedSession.savedAt).toLocaleString("uk-UA", { hour: "2-digit", minute: "2-digit", day: "numeric", month: "short" })}
+              </p>
+            </div>
+            <Button size="sm" onClick={() => restoreSession(savedSession)}>
+              <History className="mr-1.5 h-3.5 w-3.5" />
+              Продовжити
+            </Button>
+            <Button variant="ghost" size="sm" onClick={discardSession}>
+              <Trash2 className="h-3.5 w-3.5 text-muted-foreground" />
+            </Button>
+          </CardContent>
+        </Card>
+      )}
+
       <div className="space-y-6">
-        {/* Product selection */}
+        {/* Product */}
         <div className="space-y-2">
           <Label className="text-base font-semibold">Товар</Label>
           {products.length === 0 ? (
@@ -398,13 +813,12 @@ export function GenerateWizard({ products }: GenerateWizardProps) {
               <CardContent className="flex items-center gap-3 py-6">
                 <AlertCircle className="h-5 w-5 text-muted-foreground" />
                 <p className="text-sm text-muted-foreground">
-                  Немає готових товарів. Спочатку створіть товар та заповніть
-                  Product DNA.
+                  Немає готових товарів. Спочатку створіть товар та заповніть Product DNA.
                 </p>
               </CardContent>
             </Card>
           ) : (
-            <Select value={productId} onValueChange={setProductId}>
+            <Select value={productId} onValueChange={(v) => v && setProductId(v)}>
               <SelectTrigger className="w-full">
                 <SelectValue placeholder="Оберіть товар...">
                   {selectedProduct
@@ -419,9 +833,7 @@ export function GenerateWizard({ products }: GenerateWizardProps) {
                       <Package className="h-3.5 w-3.5 text-muted-foreground" />
                       {p.brand.name} — {p.name}
                       {p.price && (
-                        <span className="text-xs text-muted-foreground">
-                          ({p.price})
-                        </span>
+                        <span className="text-xs text-muted-foreground">({p.price})</span>
                       )}
                     </span>
                   </SelectItem>
@@ -431,95 +843,117 @@ export function GenerateWizard({ products }: GenerateWizardProps) {
           )}
         </div>
 
-        {/* Creative type */}
+        {/* Templates */}
         <div className="space-y-3">
-          <Label className="text-base font-semibold">Тип креативу</Label>
-          <div className="grid gap-3 sm:grid-cols-2">
-            {CREATIVE_TYPES.map((type) => {
-              const isSelected = creativeType === type.id;
-              const Icon = type.icon;
-              return (
+          <Label className="text-base font-semibold">
+            Шаблони
+            <span className="ml-2 text-xs font-normal text-muted-foreground">
+              до 4 шаблонів · обрано {selectedTemplateIds.size}
+            </span>
+          </Label>
+
+          {templatesLoading ? (
+            <div className="flex justify-center py-8">
+              <Loader2 className="h-5 w-5 animate-spin text-muted-foreground" />
+            </div>
+          ) : templates.length === 0 ? (
+            <Card>
+              <CardContent className="flex items-center gap-3 py-6">
+                <ImageIcon className="h-5 w-5 text-muted-foreground" />
+                <p className="text-sm text-muted-foreground">
+                  Шаблонів ще немає. Попросіть адміністратора додати їх.
+                </p>
+              </CardContent>
+            </Card>
+          ) : (
+            <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-4">
+              {templates.map((t) => {
+                const isSelected = selectedTemplateIds.has(t.id);
+                return (
+                  <button
+                    key={t.id}
+                    type="button"
+                    onClick={() => toggleTemplate(t.id)}
+                    className={cn(
+                      "group relative overflow-hidden rounded-lg border-2 transition-all",
+                      isSelected
+                        ? "border-primary shadow-md"
+                        : "border-transparent hover:border-primary/40",
+                    )}
+                  >
+                    <div className="relative aspect-[3/4]">
+                      <Image
+                        src={t.imageUrl}
+                        alt={t.label || "Шаблон"}
+                        fill
+                        className="object-cover"
+                        unoptimized
+                      />
+                      {isSelected && (
+                        <div className="absolute inset-0 flex items-center justify-center bg-primary/20">
+                          <div className="flex h-8 w-8 items-center justify-center rounded-full bg-primary text-primary-foreground">
+                            <Check className="h-5 w-5" />
+                          </div>
+                        </div>
+                      )}
+                    </div>
+                    <div className="bg-card px-2 py-1.5">
+                      <p className="truncate text-xs font-medium">{t.label || "Шаблон"}</p>
+                    </div>
+                  </button>
+                );
+              })}
+            </div>
+          )}
+        </div>
+
+        {/* Model + count selectors */}
+        <div className="grid grid-cols-2 gap-4">
+          <div className="space-y-2">
+            <Label className="text-base font-semibold">Модель</Label>
+            <div className="flex gap-3">
+              {(["gpt-image-1", "gpt-image-2"] as const).map((m) => (
                 <button
-                  key={type.id}
+                  key={m}
                   type="button"
-                  onClick={() => setCreativeType(type.id)}
+                  onClick={() => setImageModel(m)}
                   className={cn(
-                    "group relative rounded-xl border-2 p-4 text-left transition-all",
-                    isSelected
-                      ? "border-primary bg-primary/5 shadow-sm"
-                      : "border-border hover:border-primary/40 hover:bg-muted/50"
+                    "rounded-lg border-2 px-4 py-2.5 text-sm font-medium transition-all",
+                    imageModel === m
+                      ? "border-primary bg-primary/5 text-foreground"
+                      : "border-border text-muted-foreground hover:border-primary/40",
                   )}
                 >
-                  <div className="flex items-start gap-3">
-                    <div
-                      className={cn(
-                        "flex h-9 w-9 shrink-0 items-center justify-center rounded-lg transition-colors",
-                        isSelected
-                          ? "bg-primary text-primary-foreground"
-                          : "bg-muted text-muted-foreground group-hover:bg-primary/10 group-hover:text-primary"
-                      )}
-                    >
-                      <Icon className="h-4.5 w-4.5" />
-                    </div>
-                    <div className="min-w-0">
-                      <p className="font-semibold text-foreground">
-                        {type.label}
-                      </p>
-                      <p className="mt-0.5 text-xs font-medium text-primary/70">
-                        {type.structure}
-                      </p>
-                      <p className="mt-1.5 text-xs leading-relaxed text-muted-foreground">
-                        {type.description}
-                      </p>
-                    </div>
-                  </div>
-                  {isSelected && (
-                    <div className="absolute right-3 top-3 h-2.5 w-2.5 rounded-full bg-primary" />
-                  )}
+                  {m === "gpt-image-1" ? "GPT Image 1" : "GPT Image 2"}
                 </button>
-              );
-            })}
+              ))}
+            </div>
+          </div>
+          <div className="space-y-2">
+            <Label className="text-base font-semibold">Варіантів на шаблон</Label>
+            <div className="flex gap-3">
+              {([2, 4] as const).map((c) => (
+                <button
+                  key={c}
+                  type="button"
+                  onClick={() => setImageCount(c)}
+                  className={cn(
+                    "rounded-lg border-2 px-4 py-2.5 text-sm font-medium transition-all",
+                    imageCount === c
+                      ? "border-primary bg-primary/5 text-foreground"
+                      : "border-border text-muted-foreground hover:border-primary/40",
+                  )}
+                >
+                  {c} варіанти
+                </button>
+              ))}
+            </div>
           </div>
         </div>
 
-        {/* Custom instructions */}
-        <div className="space-y-2">
-          <Label htmlFor="instructions" className="text-base font-semibold">
-            Побажання до текстів
-            <span className="ml-2 text-xs font-normal text-muted-foreground">
-              необов&apos;язково
-            </span>
-          </Label>
-          <Textarea
-            id="instructions"
-            value={customInstructions}
-            onChange={(e) => setCustomInstructions(e.target.value)}
-            placeholder="Наприклад: тематика свят, обмеження реклами медичних товарів, тон комунікації, конкретні фрази які треба використати..."
-            rows={3}
-          />
-          <p className="text-xs text-muted-foreground">
-            Ці побажання вплинуть на генерацію всіх текстів креативу — заголовки,
-            описи, CTA тощо.
-          </p>
-        </div>
-
-        {/* Promo hint */}
-        {selectedProduct?.promotion && (
-          <Card className="border-primary/30 bg-primary/5">
-            <CardContent className="flex items-center gap-3 py-3">
-              <Zap className="h-4 w-4 shrink-0 text-primary" />
-              <p className="text-sm">
-                <span className="font-medium">Активна акція:</span>{" "}
-                {selectedProduct.promotion}
-              </p>
-            </CardContent>
-          </Card>
-        )}
-
-        {/* Action */}
         <div className="flex justify-end pt-2">
           <Button size="lg" disabled={!canProceed} onClick={handleGenerate}>
-            Далі
+            Згенерувати
             <ArrowRight className="ml-2 h-4 w-4" />
           </Button>
         </div>
